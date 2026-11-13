@@ -693,7 +693,7 @@ test("api helpers: the key only in the login shell → exit 0, the bearer header
   for (const [helper] of API) {
     const t = apiEnv(helper, ECHO_CURL);
     const marker = join(t.home, "shell-ran");
-    writeFileSync(join(t.bin, "zsh"), "#!/bin/sh\n: > \"$SHELL_MARKER\"\necho shell-only-key\n", { mode: 0o755 });
+    writeFileSync(join(t.bin, "zsh"), "#!/bin/sh\n: > \"$SHELL_MARKER\"\nprintf '__ULKEY__shell-only-key\\n'\n", { mode: 0o755 });
     const r = run(helper, { ...t.env, SHELL_MARKER: marker });
     assert.equal(r.status, 0, helper);
     assert.ok(existsSync(marker), `${helper} never asked the login shell`);
@@ -752,4 +752,70 @@ test("api helpers: no zsh and no bash on PATH → falls through to auth.json, or
   const r2 = run("ollama-usage.sh", env);
   assert.equal(r2.status, 0, "auth.json still reached without any login shell");
   assert.ok(readFileSync(t.log, "utf8").includes("Bearer auth-key-ollama"));
+});
+
+// ---- a chatty rc must not become the key: a sentinel line, and a bounded wait ----
+
+const AUTH_KEYS = {
+  "ollama-usage.sh": "auth-key-ollama",
+  "synthetic-usage.sh": "auth-key-synthetic",
+  "neuralwatt-usage.sh": "auth-key-neuralwatt",
+};
+const ALL_AUTH = {
+  ollama: { type: "apiKey", key: AUTH_KEYS["ollama-usage.sh"] },
+  synthetic: { type: "apiKey", key: AUTH_KEYS["synthetic-usage.sh"] },
+  neuralwatt: { type: "apiKey", key: AUTH_KEYS["neuralwatt-usage.sh"] },
+};
+const writeAuth = (t) => {
+  mkdirSync(join(t.home, ".local/share/opencode"), { recursive: true });
+  writeFileSync(join(t.home, ".local/share/opencode/auth.json"), JSON.stringify(ALL_AUTH, null, 2) + "\n");
+};
+// Overwrites the stub zsh with a login shell that prints `body` instead of the real one.
+const chattyShell = (t, body) => writeFileSync(join(t.bin, "zsh"), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+
+test("api helpers: a chatty rc → only the text after the sentinel becomes the bearer key", () => {
+  for (const [helper] of API) {
+    const t = apiEnv(helper, ECHO_CURL);
+    chattyShell(t, 'printf "Welcome to your shell!\\n"\nprintf "__ULKEY__chatty-shell-key\\n"\nprintf "nvm: version 20.0.0\\n"');
+    const r = run(helper, t.env);
+    assert.equal(r.status, 0, helper);
+    const args = readFileSync(t.log, "utf8");
+    assert.ok(args.includes("Bearer chatty-shell-key"), `${helper} sent the sentinel's value, got: ${args}`);
+    assert.ok(!args.includes("Welcome"), `${helper} sent the greeting as its bearer token, got: ${args}`);
+    assert.ok(!r.stdout.includes("Welcome") && !r.stdout.includes("chatty-shell-key"), `${helper} leaked the shell's output`);
+  }
+});
+
+test("api helpers: the rc prints junk but no sentinel → auth.json if there is one, else exit 127", () => {
+  for (const [helper] of API) {
+    const t = apiEnv(helper, ECHO_CURL);
+    chattyShell(t, 'printf "Welcome to your shell!\\n"');
+    const r1 = run(helper, t.env);
+    assert.equal(r1.status, 127, `${helper}: junk is not a key`);
+    assert.equal(existsSync(t.log), false, `${helper} asked without a key`);
+
+    writeAuth(t);
+    const r2 = run(helper, t.env);
+    assert.equal(r2.status, 0, helper);
+    const args = readFileSync(t.log, "utf8");
+    assert.ok(args.includes(`Bearer ${AUTH_KEYS[helper]}`), `${helper} fell through to auth.json, got: ${args}`);
+    assert.ok(!args.includes("Welcome"), `${helper} sent the greeting, got: ${args}`);
+  }
+});
+
+test("api helpers: a login shell that never returns → bounded wait, then auth.json or exit 127", { timeout: 15000 }, () => {
+  const t = apiEnv("ollama-usage.sh", ECHO_CURL);
+  chattyShell(t, "exec sleep 60");
+  const env = { ...t.env, HERDR_USAGE_SHELL_TRIES: "1" }; // the test's own bound: one 0.2 s poll
+
+  const r1 = run("ollama-usage.sh", env);
+  assert.deepEqual([r1.status, r1.stdout], [127, ""]);
+  assert.ok(r1.ms < 4000, `took ${r1.ms} ms: the wait was not bounded`);
+  assert.equal(alive("sleep 60"), false, "hung shell left running");
+
+  writeAuth(t);
+  const r2 = run("ollama-usage.sh", env);
+  assert.equal(r2.status, 0, "the bounded wait still reaches auth.json");
+  assert.ok(readFileSync(t.log, "utf8").includes("Bearer auth-key-ollama"));
+  assert.ok(r2.ms < 4000, `took ${r2.ms} ms`);
 });

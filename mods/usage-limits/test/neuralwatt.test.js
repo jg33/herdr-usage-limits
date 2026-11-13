@@ -8,7 +8,7 @@ const quota = (over = {}) => JSON.stringify({
   limits: { overage_limit_usd: null, rate_limit_tier: "standard" },
   subscription: null,
   daily_free_energy: { kwh_included: 0.1, kwh_used: 0.1, kwh_remaining: 0.0, reset_at: "2026-11-14T00:00:00Z" },
-  key: { name: "M2 Studio", allowance: { limit_usd: 20.0, period: "weekly", spent_usd: 4.144047, remaining_usd: 15.855953, blocked: false, reset_at: "2026-11-16T00:00:00Z" } },
+  key: { name: "workstation", allowance: { limit_usd: 20.0, period: "weekly", spent_usd: 4.144047, remaining_usd: 15.855953, blocked: false, reset_at: "2026-11-16T00:00:00Z" } },
   ...over,
 });
 
@@ -45,7 +45,7 @@ test("zero kwh_included → the daily-energy window is omitted", () => {
 });
 
 test("zero limit_usd → the key-weekly window is omitted", () => {
-  const r = neuralwatt.parse(quota({ key: { name: "M2 Studio", allowance: { limit_usd: 0, spent_usd: 0, reset_at: "2026-11-16T00:00:00Z" } } }), NOW);
+  const r = neuralwatt.parse(quota({ key: { name: "workstation", allowance: { limit_usd: 0, spent_usd: 0, reset_at: "2026-11-16T00:00:00Z" } } }), NOW);
   assert.equal(r.status, "ok");
   assert.deepEqual(r.windows.map((w) => w.id), ["daily-energy"]);
 });
@@ -54,7 +54,7 @@ test("no usable window → error, not an empty ok", () => {
   const r = neuralwatt.parse(quota({
     limits: { overage_limit_usd: null, rate_limit_tier: "standard" },
     daily_free_energy: { kwh_included: 0, kwh_used: 0, reset_at: "2026-11-14T00:00:00Z" },
-    key: { name: "M2 Studio", allowance: { limit_usd: 0, spent_usd: 0, reset_at: "2026-11-16T00:00:00Z" } },
+    key: { name: "workstation", allowance: { limit_usd: 0, spent_usd: 0, reset_at: "2026-11-16T00:00:00Z" } },
   }), NOW);
   assert.equal(r.status, "error");
   assert.deepEqual(r.windows, []);

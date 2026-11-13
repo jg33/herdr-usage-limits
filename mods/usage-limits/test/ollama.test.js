@@ -87,3 +87,84 @@ test("malformed or empty input → a non-ok report, never a throw", () => {
     assert.ok(r.message);
   }
 });
+
+// Shape B: plan limits — `remaining_percent` is what is *left*, so used = 100 − remaining.
+test("plan fixture → two windows, session 43% and weekly 90% used", () => {
+  const r = ollama.parse(read("ollama-balance-plan.json"), NOW);
+  assert.equal(r.status, "ok");
+  assert.equal(r.source, "ollama.com");
+  assert.equal(r.windows.length, 2);
+  const [session, weekly] = r.windows;
+  assert.deepEqual([session.id, session.short, session.long], ["session", "sess", "Session"]);
+  assert.equal(session.percent, 43); // 100 − 56.54 = 43.46, rounded once in makeWindow
+  assert.equal(session.resetsAt, Math.floor(Date.parse("2026-11-14T01:00:00Z") / 1000));
+  assert.deepEqual([weekly.id, weekly.short, weekly.long], ["weekly", "wk", "Weekly"]);
+  assert.equal(weekly.percent, 90); // 100 − 10.34 = 89.66
+  assert.equal(weekly.resetsAt, Math.floor(Date.parse("2026-11-16T00:00:00Z") / 1000));
+});
+
+test("plan remaining_percent outside 0..100 → clamped, no escaped percentage", () => {
+  for (const [rem, want] of [[150, 0], [-10, 100]]) {
+    const text = JSON.stringify({ included: { session: { remaining_percent: rem, resets_at: null } }, purchased: { balance_usd: 0 } });
+    const r = ollama.parse(text, NOW);
+    assert.equal(r.status, "ok");
+    assert.equal(r.windows.length, 1);
+    assert.equal(r.windows[0].percent, want, `remaining ${rem}`);
+    assert.ok(r.windows[0].percent >= 0 && r.windows[0].percent <= 100);
+  }
+});
+
+test("plan session present, weekly missing → one window, no crash", () => {
+  const text = JSON.stringify({ included: { session: { remaining_percent: 56.54, resets_at: "2026-11-14T01:00:00Z" } }, purchased: { balance_usd: 0 } });
+  const r = ollama.parse(text, NOW);
+  assert.equal(r.status, "ok");
+  assert.equal(r.windows.length, 1);
+  assert.deepEqual([r.windows[0].id, r.windows[0].percent], ["session", 43]);
+});
+
+test("plan numbers missing/non-numeric → the window is omitted, not NaN or 0", () => {
+  const text = JSON.stringify({
+    included: { session: { remaining_percent: "56.54" }, weekly: { resets_at: "2026-11-16T00:00:00Z" } },
+    purchased: { balance_usd: 0 },
+  });
+  const r = ollama.parse(text, NOW);
+  assert.equal(r.status, "unavailable"); // both windows unusable, nothing else to show
+  assert.deepEqual(r.windows, []);
+});
+
+test("both shapes present → plan windows plus the balance window", () => {
+  const text = JSON.stringify({
+    included: {
+      session: { remaining_percent: 56.54, resets_at: "2026-11-14T01:00:00Z" },
+      weekly: { remaining_percent: 10.34, resets_at: "2026-11-16T00:00:00Z" },
+      balance_usd: 30,
+      allowance_usd: 60,
+      period: { until: "2026-11-16T16:48:11Z" },
+    },
+    purchased: { balance_usd: 0 },
+  });
+  const r = ollama.parse(text, NOW);
+  assert.equal(r.status, "ok");
+  assert.deepEqual(r.windows.map((w) => w.id), ["session", "weekly", "balance"]);
+  assert.deepEqual(r.windows.map((w) => w.percent), [43, 90, 50]);
+  // unusable allowance in a both-shapes reply → plan windows survive, balance is omitted
+  const noAllowance = ollama.parse(JSON.stringify({
+    included: { session: { remaining_percent: 56.54, resets_at: null }, balance_usd: 30 },
+    purchased: { balance_usd: 0 },
+  }), NOW);
+  assert.deepEqual(noAllowance.windows.map((w) => w.id), ["session"]);
+});
+
+test("unrecognised or empty payloads → error/unavailable, total and non-throwing", () => {
+  const cases = ["{}", "null", "not json"];
+  for (const text of cases) {
+    const r = ollama.parse(text, NOW);
+    assert.equal(r.status, "error", JSON.stringify(text));
+    assert.deepEqual(r.windows, []);
+    assert.ok(r.message);
+  }
+  const bare = ollama.parse(JSON.stringify({ included: {} }), NOW);
+  assert.equal(bare.status, "unavailable"); // recognised shape, no usable numbers
+  assert.deepEqual(bare.windows, []);
+  assert.ok(bare.message);
+});

@@ -135,10 +135,13 @@ on the bar and in the panel. It never reads a token.
     limits. `providers/index.js` lists them
     in order. A new provider is one more file there plus its helper.
     `providers/ollama.js`, `providers/synthetic.js` and `providers/neuralwatt.js`
-    keep the limits shape, add `tint: true` (a one-colour SVG drawn in the text
-    colour), and are the opt-in three: `prefs.js`'s `enabled` list (default
+    keep the limits shape and are the opt-in three: `prefs.js`'s `enabled` list (default
     `enabled: []`) gates `isShown`/`inPanel`, so an unticked one gets no fetch at
-    all. Windows: ollama one `balance` (`(allowance - included.balance_usd -
+    all. Only ollama adds `tint: true` (a one-colour SVG drawn in the text
+    colour) — its llama mark is monochrome; synthetic (`#6366F1`) and neuralwatt
+    (`#D55934`) carry brand colours, so they are not tinted and are drawn as
+    images.
+    Windows: ollama one `balance` (`(allowance - included.balance_usd -
     purchased.balance_usd) / allowance`, `purchased` a scalar or `{balance_usd}`,
     absent = 0), synthetic `weekly` (`100 - planWeeklyLimit.percentRemaining`, the
     only window), neuralwatt `key-weekly` (`key.allowance.spent_usd / limit_usd`) plus
@@ -171,9 +174,14 @@ on the bar and in the panel. It never reads a token.
     `helpers/neuralwatt-usage.sh`: `curl -s --max-time 10`, one GET each of
     `https://ollama.com/api/balance`, `https://api.synthetic.new/v2/quotas` and
     `https://api.neuralwatt.com/v1/quota`, bearer key from `OLLAMA_API_KEY` /
-    `SYNTHETIC_API_KEY` / `NEURALWATT_API_KEY`, else the same-named entry of
-    `${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json`; print the reply body
-    whole as one JSON line, the key never echoed or written. Exit 0 with the
+    `SYNTHETIC_API_KEY` / `NEURALWATT_API_KEY`, else the same-named variable in
+    the login shell (`zsh -lic`, else `bash -lc` — a mod's `exec` inherits launchd's
+    environment, not your shell rc), else the same-named entry of
+    `${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json`. The shell's output only
+    counts after a `__ULKEY__` sentinel (a chatty rc can't slip junk in as the
+    key), polled with a ~5 s bound so a hanging rc can't hang the fetch; the shell's
+    output lands in a temp file that is deleted before the helper exits. Print the
+    reply body whole as one JSON line, the key never echoed. Exit 0 with the
     body, 127 when no key is found, 1 when curl fails, is missing or prints
     nothing. No bashisms (`sh`, `printf`, `command -v`).
   - `test/fixtures/ollama-balance.json`, `test/fixtures/synthetic-quotas.json` and
@@ -231,7 +239,8 @@ on the bar and in the panel. It never reads a token.
   processes, names and arguments, to count the copies of an agent in a folder;
   that stays on the machine.
 - Reads no token or credential file — except an enabled optional provider's
-  helper, which reads opencode's `auth.json` for its key when the env var is
+  helper, which asks your login shell (`zsh -lic`, else `bash -lc`) and reads
+  opencode's `auth.json` for its key when the env var is
   absent. Reads `~/.codex/sessions/**/*.jsonl`
   only as a fallback.
 - Reads the focused session: Claude's and Codex's logs, OpenCode's database

@@ -8,7 +8,7 @@ import { HoverCard, h_flex, v_flex } from "gpui-base";
 import { exec, focused, theme, props, shared, setShared, appHome } from "herdr";
 import { PROVIDERS } from "./providers/index.js";
 import { barModel, cardModel, chooseDensity, hasLimits, limitsSettled, panelOnEnter, wanted } from "./lib/view.js";
-import { effectivePrefs, inPanel, isOnBar, isShown, spendOnBar, toggleFolded, toggleOnBar, togglePanel, toggleProvider, toggleShowBars, toggleShowResetTime, toggleSpendOnBar, toggleWindow } from "./lib/prefs.js";
+import { effectivePrefs, inPanel, isOnBar, isEnabled, isShown, OPT_IN_PROVIDERS, spendOnBar, toggleEnabled, toggleFolded, toggleOnBar, togglePanel, toggleProvider, toggleShowBars, toggleShowResetTime, toggleSpendOnBar, toggleWindow } from "./lib/prefs.js";
 import { sessionOnBar, sessionView } from "./lib/session.js";
 import { KEY_BINDINGS, codexBinding, sessionReadResult } from "./lib/session-binding.js";
 import { nextState } from "./lib/state.js";
@@ -507,10 +507,11 @@ export default class UsageLimits extends View {
           () => { const fresh = this.prefs(); save(toggleSpendOnBar(fresh, p.id, spendBar(fresh, states(), p.id))); }, t, 0, reason, inThePanel(p.id)));
         continue;
       }
-      const on = isShown(prefs, p.id);
-      const reason = s.installed === false ? "not installed" : s.report && s.report.status !== "ok" ? s.report.message : null;
+      const optIn = OPT_IN_PROVIDERS.has(p.id);
+      const on = optIn ? isEnabled(prefs, p.id) : isShown(prefs, p.id);
+      const reason = optIn && !on ? "off — not enabled" : s.installed === false ? "not installed" : s.report && s.report.status !== "ok" ? s.report.message : null;
       rows.push(this.check(`p-${p.id}`, on, [providerIcon(p.id, p.icon, s.installed === false ? t.dim : t.foreground), div().text_color(s.installed === false ? t.dim : t.foreground).child(p.name)],
-        () => save(toggleProvider(this.prefs(), p.id)), t, 0, reason, inThePanel(p.id)));
+        () => save(optIn ? toggleEnabled(this.prefs(), p.id) : toggleProvider(this.prefs(), p.id)), t, 0, reason, inThePanel(p.id)));
       const windows = shownReading?.windows ?? [];
       for (const w of windows) {
         rows.push(this.check(`w-${p.id}-${w.id}`, on && isShown(prefs, p.id, w.id), [div().text_color(on ? t.muted : t.dim).child(w.long)],

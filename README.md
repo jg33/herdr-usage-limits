@@ -25,13 +25,15 @@ See how much Claude Code and Codex you have left, right in Herdr's status bar:
 - **Everything on hover:** rest the pointer on the limits for the full picture.
 - **Your current session:** how full the context is, how many messages you've sent, how many times it was compacted.
 - **OpenCode and Pi:** the tokens they used today and over the last 7 days. They have no limits to show.
+- **Three more, on request:** Ollama, Synthetic and NeuralWatt quotas, off until you switch them on.
 
 OpenCode session statistics support both legacy and current SQLite storage automatically.
 Both appear as the same **OpenCode** block, with the same settings and counters; there is
 no version selector. Schema adapters handle message and compaction differences internally.
 
 It asks your own `claude` and `codex` CLIs, reads OpenCode's local database and Pi's
-session files, so there is no API key to add and no model usage to pay for.
+session files, so there is no API key to add and no model usage to pay for. The three
+optional providers below are the exception: each takes one API key.
 
 ## Read the bar
 
@@ -109,6 +111,7 @@ remembered across restarts.
 
 - **Claude, Codex and their limits** are on by default. Untick what you don't watch.
 - **OpenCode and Pi** put today's tokens on the bar: `today 240k`. They're off the bar by default, unless no provider with limits has any numbers; then they're on.
+- **Ollama, Synthetic and NeuralWatt** are off until you tick their box under **Bar** (see [Optional providers](#optional-providers)).
 - **Always show time to reset** adds the time to every limit, green ones too.
 - **Show bars** keeps a bar beside each limit. Untick it for numbers only.
 - **This session** puts the numbers on the bar: `ctx` for context, `⇄` for calls, `▼` for compactions.
@@ -120,6 +123,27 @@ remembered across restarts.
 <p align="center">
   <img src="assets/session-bar.png" width="100%" alt="The status bar with context, calls and compactions on its left: ctx 182k, 32 calls, 2 compactions, then the limits">
 </p>
+
+## Optional providers
+
+Ollama, Synthetic and NeuralWatt come with the mod and are **off by default**: until you
+tick one, it makes **no network request at all** — no row, no panel line, nothing asked.
+
+- **Turning one on:** click ⚙ in the panel and tick the provider's box under **Bar** (its
+  Panel box works too). Untick it and it stops being asked again.
+- **One key each:** `OLLAMA_API_KEY`, `SYNTHETIC_API_KEY`, `NEURALWATT_API_KEY`. With the
+  env var absent, the helper falls back to the same-named entry of
+  `~/.local/share/opencode/auth.json`. No key found hides the row (you don't use the
+  service) rather than turning it red; the key is never echoed or written.
+- **What each shows:**
+  - **Ollama** — one window: balance against the included allowance, resetting when the
+    period ends.
+  - **Synthetic** — one: the weekly plan limit (its remaining share, shown as percent used).
+  - **NeuralWatt** — two: the weekly key allowance and today's free energy in kWh, with
+    the rate-limit tier as its plan.
+- **NeuralWatt's prepaid credits are deliberately not a window:** spent credits have no
+  reset date and would draw a permanent red 100%. The windows that reset are the ones
+  shown.
 
 ## It doesn't guess
 
@@ -166,7 +190,8 @@ Give the block more weight if you want the bars to stay when a window gets tight
 
 ## What it runs
 
-- `sh`, your `claude` CLI and your `codex` CLI, each briefly, every 5 minutes. They use their own sign-ins and talk to Anthropic and OpenAI. The mod makes no network requests itself.
+- `sh`, your `claude` CLI and your `codex` CLI, each briefly, every 5 minutes. They use their own sign-ins and talk to Anthropic and OpenAI. The mod's own code makes no network requests.
+- The optional providers you've enabled run `curl` once per refresh — `ollama.com/api/balance`, `api.synthetic.new/v2/quotas` or `api.neuralwatt.com/v1/quota` — with their key from the environment or opencode's `auth.json` (see [Optional providers](#optional-providers)). One you haven't enabled is never fetched.
 - OpenCode's local database, read-only, for today's and seven calendar days' tokens.
   This works for both storage formats, including OpenCode installed through NVM and
   legacy CLIs without `stats --json`. Only numeric totals reach the mod. If no database
@@ -178,7 +203,7 @@ Give the block more weight if you want the bars to stay when a window gets tight
   Codex's `state_*.sqlite` index read-only for writer-lock lookup and the session picker.
   The picker passes session IDs and titles to the mod; rollout message text stays in
   the helper. `CODEX_HOME` and `CODEX_SQLITE_HOME` are respected.
-- It reads no token or credential file.
+- It reads no token or credential file — the one exception is an enabled optional provider's helper, which reads opencode's `auth.json` for its key when the environment has none (the key is never echoed or written).
 - It reads the focused session's log (`~/.claude/projects/`, `~/.codex/sessions/`), which holds your conversation. `helpers/session.sh` passes on numbers only. `~/.codex/sessions/**/*.jsonl` is also the fallback for Codex's limits.
 - For OpenCode's session it reads OpenCode's database (`$XDG_DATA_HOME/opencode/opencode.db`, by default `~/.local/share/opencode/opencode.db`) with `sqlite3`, read-only. For Pi it reads Pi's session files (`~/.pi/agent/sessions/`): the focused session's, and those written in the last 8 days for the tokens. Both hold your conversation. `helpers/session.sh` and `helpers/pi-spend.sh` pass on only numbers (counts and times) and a model id. It never runs `pi`.
 

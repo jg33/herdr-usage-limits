@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, readFileSync, utimesSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MOD, HERE } from "./_util.js";
@@ -571,4 +571,185 @@ test("opencode spend helper: a banner before the JSON is cut off", () => {
   const out = JSON.parse(r.stdout);
   assert.equal(out.today.tokens.input, 17456);
   assert.equal(out.week.tokens.input, 412300);
+});
+
+// ---- API helpers (ollama, synthetic, neuralwatt): a fake curl on PATH, no network ----
+
+const API = [
+  ["ollama-usage.sh", "OLLAMA_API_KEY", "https://ollama.com/api/balance"],
+  ["synthetic-usage.sh", "SYNTHETIC_API_KEY", "https://api.synthetic.new/v2/quotas"],
+  ["neuralwatt-usage.sh", "NEURALWATT_API_KEY", "https://api.neuralwatt.com/v1/quota"],
+];
+
+// A temp HOME with no opencode auth.json, and a fake curl that logs its arguments.
+// The key env vars are forced empty: only what a test passes in counts.
+function apiEnv(helper, curlScript, extra = {}) {
+  const home = mkdtempSync(join(tmpdir(), "ul-home-"));
+  const bin = mkdtempSync(join(tmpdir(), "ul-bin-"));
+  const log = join(home, "curl-args");
+  writeFileSync(join(bin, "curl"), curlScript, { mode: 0o755 });
+  // Stub login shells: they answer with nothing (the real one would tie these
+  // tests to this machine's rc files) and touch $SHELL_MARKER when consulted.
+  for (const name of ["zsh", "bash"]) {
+    writeFileSync(join(bin, name), '#!/bin/sh\nif [ -n "$SHELL_MARKER" ]; then : > "$SHELL_MARKER"; fi\n', { mode: 0o755 });
+  }
+  const keys = Object.fromEntries(API.map(([, key]) => [key, ""]));
+  return {
+    env: {
+      ...process.env,
+      ...keys,
+      PATH: `${bin}:${process.env.PATH}`,
+      HOME: home,
+      XDG_DATA_HOME: join(home, ".local/share"),
+      FAKE_CURL_LOG: log,
+      ...extra,
+    },
+    home,
+    log,
+    bin,
+    helper: helper ?? API[0][0],
+  };
+}
+
+const ECHO_CURL = '#!/bin/sh\nprintf "%s\\n" "$@" > "$FAKE_CURL_LOG"\nprintf \'{"included":{}}\\n\'\n';
+const FAILING_CURL = "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$FAKE_CURL_LOG\"\nexit 7\n";
+const EMPTY_CURL = "#!/bin/sh\nexit 0\n";
+
+test("api helpers: a key from the environment → exit 0, the reply passed through, the right URL asked", () => {
+  for (const [helper, key, url] of API) {
+    const t = apiEnv(helper, ECHO_CURL, { [key]: "env-test-key" });
+    const r = run(helper, t.env);
+    assert.equal(r.status, 0, helper);
+    assert.deepEqual(JSON.parse(r.stdout), { included: {} }, helper);
+    const args = readFileSync(t.log, "utf8");
+    assert.ok(args.includes(url), `${helper} asked ${url}, got: ${args}`);
+    assert.ok(args.includes(`Bearer env-test-key`), `${helper} sent the Authorization header`);
+  }
+});
+
+test("api helpers: no env key and no auth.json → exit 127 (the row hides), no output", () => {
+  for (const [helper] of API) {
+    const t = apiEnv(helper, ECHO_CURL);
+    const r = run(helper, t.env);
+    assert.equal(r.status, 127, helper);
+    assert.equal(r.stdout, "", helper);
+    assert.equal(existsSync(t.log), false, `${helper} asked without a key`);
+  }
+});
+
+test("api helpers: the auth.json fallback finds the entry and keeps the key out of the output", () => {
+  const auth = { ollama: { type: "apiKey", key: "auth-key-ollama" }, synthetic: { type: "apiKey", key: "auth-key-synthetic" }, neuralwatt: { type: "apiKey", key: "auth-key-neuralwatt" } };
+  const expect = { "ollama-usage.sh": "auth-key-ollama", "synthetic-usage.sh": "auth-key-synthetic", "neuralwatt-usage.sh": "auth-key-neuralwatt" };
+  for (const [helper] of API) {
+    const t = apiEnv(helper, ECHO_CURL);
+    mkdirSync(join(t.home, ".local/share/opencode"), { recursive: true });
+    writeFileSync(join(t.home, ".local/share/opencode/auth.json"), JSON.stringify(auth, null, 2) + "\n");
+    const r = run(helper, t.env);
+    assert.equal(r.status, 0, helper);
+    assert.ok(readFileSync(t.log, "utf8").includes(`Bearer ${expect[helper]}`), `${helper} used its auth.json entry`);
+    assert.ok(!r.stdout.includes(expect[helper]), `${helper} printed its key`);
+  }
+});
+
+test("api helpers: auth.json without the entry → exit 127", () => {
+  const t = apiEnv("ollama-usage.sh", ECHO_CURL);
+  mkdirSync(join(t.home, ".local/share/opencode"), { recursive: true });
+  writeFileSync(join(t.home, ".local/share/opencode/auth.json"), JSON.stringify({ synthetic: { type: "apiKey", key: "other" } }) + "\n");
+  const r = run("ollama-usage.sh", t.env);
+  assert.equal(r.status, 127);
+  assert.equal(r.stdout, "");
+});
+
+test("api helpers: a failing curl → exit 1, no output", () => {
+  for (const [helper, key] of API) {
+    const t = apiEnv(helper, FAILING_CURL, { [key]: "env-test-key" });
+    const r = run(helper, t.env);
+    assert.equal(r.status, 1, helper);
+    assert.equal(r.stdout, "", helper);
+  }
+});
+
+test("api helpers: curl that prints nothing → exit 1", () => {
+  const t = apiEnv("ollama-usage.sh", EMPTY_CURL, { OLLAMA_API_KEY: "env-test-key" });
+  const r = run("ollama-usage.sh", t.env);
+  assert.equal(r.status, 1);
+  assert.equal(r.stdout, "");
+});
+
+test("api helpers: synthetic and neuralwatt, curl that prints nothing → exit 1, not 0", () => {
+  for (const [helper, key] of API.filter(([h]) => h !== "ollama-usage.sh")) {
+    const t = apiEnv(helper, EMPTY_CURL, { [key]: "env-test-key" });
+    const r = run(helper, t.env);
+    assert.equal(r.status, 1, helper);
+    assert.equal(r.stdout, "", helper);
+  }
+});
+
+// ---- resolution order: env var → login shell → auth.json → 127 ----
+// The stub shells in t.bin print nothing and touch $SHELL_MARKER when consulted;
+// zsh here is overwritten to answer with the key.
+
+test("api helpers: the key only in the login shell → exit 0, the bearer header carries it", () => {
+  for (const [helper] of API) {
+    const t = apiEnv(helper, ECHO_CURL);
+    const marker = join(t.home, "shell-ran");
+    writeFileSync(join(t.bin, "zsh"), "#!/bin/sh\n: > \"$SHELL_MARKER\"\necho shell-only-key\n", { mode: 0o755 });
+    const r = run(helper, { ...t.env, SHELL_MARKER: marker });
+    assert.equal(r.status, 0, helper);
+    assert.ok(existsSync(marker), `${helper} never asked the login shell`);
+    const args = readFileSync(t.log, "utf8");
+    assert.ok(args.includes("Bearer shell-only-key"), `${helper} sent the shell's key, got: ${args}`);
+    assert.ok(!r.stdout.includes("shell-only-key"), `${helper} printed its key`);
+  }
+});
+
+test("api helpers: env key present → exit 0 without consulting the login shell", () => {
+  for (const [helper, key] of API) {
+    const t = apiEnv(helper, ECHO_CURL, { [key]: "env-test-key" });
+    const marker = join(t.home, "shell-ran");
+    const r = run(helper, { ...t.env, SHELL_MARKER: marker });
+    assert.equal(r.status, 0, helper);
+    assert.equal(existsSync(marker), false, `${helper} paid for a login shell it didn't need`);
+  }
+});
+
+test("api helpers: no key in env, login shell, or auth.json → exit 127, after asking the shell", () => {
+  const t = apiEnv("ollama-usage.sh", ECHO_CURL);
+  const marker = join(t.home, "shell-ran");
+  const r = run("ollama-usage.sh", { ...t.env, SHELL_MARKER: marker });
+  assert.equal(r.status, 127);
+  assert.equal(r.stdout, "");
+  assert.ok(existsSync(marker), "the login shell was never consulted");
+  assert.equal(existsSync(t.log), false, "asked without a key");
+});
+
+test("api helpers: auth.json entry, empty env and shell → exit 0 via the pre-existing path", () => {
+  const t = apiEnv("ollama-usage.sh", ECHO_CURL);
+  const marker = join(t.home, "shell-ran");
+  mkdirSync(join(t.home, ".local/share/opencode"), { recursive: true });
+  writeFileSync(join(t.home, ".local/share/opencode/auth.json"), JSON.stringify({ ollama: { type: "apiKey", key: "auth-key-ollama" } }) + "\n");
+  const r = run("ollama-usage.sh", { ...t.env, SHELL_MARKER: marker });
+  assert.equal(r.status, 0);
+  assert.ok(existsSync(marker), "the login shell was consulted before auth.json");
+  assert.ok(readFileSync(t.log, "utf8").includes("Bearer auth-key-ollama"));
+});
+
+test("api helpers: no zsh and no bash on PATH → falls through to auth.json, or 127, never an error", () => {
+  // A PATH holding exactly what the helper needs: sh, sed, tr, the fake curl — no shells.
+  const bin = mkdtempSync(join(tmpdir(), "ul-nosh-"));
+  for (const [name, target] of [["sh", "/bin/sh"], ["sed", "/usr/bin/sed"], ["tr", "/usr/bin/tr"]]) symlinkSync(target, join(bin, name));
+  writeFileSync(join(bin, "curl"), ECHO_CURL, { mode: 0o755 });
+
+  const t = apiEnv("ollama-usage.sh", ECHO_CURL);
+  const env = { ...t.env, PATH: bin };
+  const r1 = run("ollama-usage.sh", env);
+  assert.equal(r1.status, 127, "no key anywhere, no shell to ask");
+  assert.equal(r1.stdout, "");
+  assert.equal(existsSync(t.log), false, "asked without a key");
+
+  mkdirSync(join(t.home, ".local/share/opencode"), { recursive: true });
+  writeFileSync(join(t.home, ".local/share/opencode/auth.json"), JSON.stringify({ ollama: { type: "apiKey", key: "auth-key-ollama" } }) + "\n");
+  const r2 = run("ollama-usage.sh", env);
+  assert.equal(r2.status, 0, "auth.json still reached without any login shell");
+  assert.ok(readFileSync(t.log, "utf8").includes("Bearer auth-key-ollama"));
 });

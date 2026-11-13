@@ -1,13 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { effectivePrefs, inPanel, isFolded, isOnBar, isShown, spendOnBar, toggleFolded, toggleOnBar, togglePanel, toggleProvider, toggleShowBars, toggleShowResetTime, toggleSpendOnBar, toggleWindow } from "../lib/prefs.js";
+import { effectivePrefs, inPanel, isFolded, isEnabled, isOnBar, isShown, spendOnBar, toggleEnabled, toggleFolded, toggleOnBar, togglePanel, toggleProvider, toggleShowBars, toggleShowResetTime, toggleSpendOnBar, toggleWindow } from "../lib/prefs.js";
 
 test("layout presets apply until saved prefs exist", () => {
   const props = { hidden: ["codex"], hiddenWindows: ["claude:session"] };
-  assert.deepEqual(effectivePrefs(null, props), { hidden: ["codex"], hiddenWindows: ["claude:session"], showResetTime: false, showBars: true, sessionOnBar: [], panelHidden: [], folded: [], spendOnBar: {} });
-  assert.deepEqual(effectivePrefs({ hidden: [], hiddenWindows: [] }, props), { hidden: [], hiddenWindows: [], showResetTime: false, showBars: true, sessionOnBar: [], panelHidden: [], folded: [], spendOnBar: {} });
-  assert.deepEqual(effectivePrefs(null, {}), { hidden: [], hiddenWindows: [], showResetTime: false, showBars: true, sessionOnBar: [], panelHidden: [], folded: [], spendOnBar: {} });
-  assert.deepEqual(effectivePrefs(undefined, undefined), { hidden: [], hiddenWindows: [], showResetTime: false, showBars: true, sessionOnBar: [], panelHidden: [], folded: [], spendOnBar: {} });
+  assert.deepEqual(effectivePrefs(null, props), { hidden: ["codex"], hiddenWindows: ["claude:session"], showResetTime: false, showBars: true, sessionOnBar: [], panelHidden: [], folded: [], spendOnBar: {}, enabled: [] });
+  assert.deepEqual(effectivePrefs({ hidden: [], hiddenWindows: [] }, props), { hidden: [], hiddenWindows: [], showResetTime: false, showBars: true, sessionOnBar: [], panelHidden: [], folded: [], spendOnBar: {}, enabled: [] });
+  assert.deepEqual(effectivePrefs(null, {}), { hidden: [], hiddenWindows: [], showResetTime: false, showBars: true, sessionOnBar: [], panelHidden: [], folded: [], spendOnBar: {}, enabled: [] });
+  assert.deepEqual(effectivePrefs(undefined, undefined), { hidden: [], hiddenWindows: [], showResetTime: false, showBars: true, sessionOnBar: [], panelHidden: [], folded: [], spendOnBar: {}, enabled: [] });
 });
 
 test("anything not listed is shown, including new windows", () => {
@@ -107,9 +107,45 @@ test("spend on the bar: default until chosen, then the choice wins", () => {
   assert.equal(spendOnBar(on, "opencode", false), true);
   assert.equal(spendOnBar(toggleSpendOnBar(on, "opencode", true), "opencode", true), false);
 });
+test("the three opt-in providers are off until enabled; claude is unaffected", () => {
+  const p = effectivePrefs(null, {});
+  for (const id of ["ollama", "synthetic", "neuralwatt"]) {
+    assert.equal(isShown(p, id), false);
+    assert.equal(inPanel(p, id), false);
+    assert.equal(isEnabled(p, id), false);
+  }
+  assert.equal(isShown(p, "claude"), true);
+  assert.equal(inPanel(p, "claude"), true);
+  assert.equal(isEnabled(p, "claude"), true, "non-opt-in providers are always enabled");
+});
+
+test("toggleEnabled flips an opt-in provider on, then off, keeping the rest", () => {
+  const p0 = effectivePrefs(null, {});
+  const p1 = toggleEnabled(p0, "ollama");
+  assert.equal(isEnabled(p1, "ollama"), true);
+  assert.equal(isShown(p1, "ollama"), true);
+  assert.equal(isShown(p1, "ollama", "balance"), true, "per-window case too");
+  assert.equal(inPanel(p1, "ollama"), true);
+  assert.equal(isEnabled(p1, "synthetic"), false, "toggling one leaves the others");
+  assert.deepEqual(p0.enabled, [], "no mutation");
+  const p2 = toggleEnabled(p1, "ollama");
+  assert.equal(isEnabled(p2, "ollama"), false);
+  assert.equal(isShown(p2, "ollama"), false);
+  assert.equal(inPanel(p2, "ollama"), false);
+});
+
+test("old saved prefs: no enabled field normalises to [], opt-in still off, claude shown", () => {
+  const p = effectivePrefs({ hidden: [], hiddenWindows: [] }, undefined);
+  assert.deepEqual(p.enabled, []);
+  assert.equal(isShown(p, "claude"), true);
+  assert.equal(inPanel(p, "claude"), true);
+  assert.equal(isShown(p, "neuralwatt"), false);
+  assert.equal(inPanel(p, "neuralwatt"), false);
+});
+
 test("every existing toggle keeps the new keys", () => {
   const p = toggleFolded(togglePanel(effectivePrefs(null, undefined), "pi"), "claude");
-  for (const q of [toggleProvider(p, "codex"), toggleWindow(p, "claude", "session"), toggleShowResetTime(p), toggleShowBars(p), toggleOnBar(p, "calls")]) {
+  for (const q of [toggleProvider(p, "codex"), toggleWindow(p, "claude", "session"), toggleShowResetTime(p), toggleShowBars(p), toggleOnBar(p, "calls"), toggleEnabled(p, "ollama")]) {
     assert.deepEqual([q.panelHidden, q.folded], [["pi"], ["claude"]]);
   }
 });

@@ -253,6 +253,8 @@ test("panelOnEnter: limits stay limits", () => {
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tightest, hasLimits, limitsSettled, wanted } from "../lib/view.js";
+import { effectivePrefs, toggleEnabled } from "../lib/prefs.js";
+import ollama from "../providers/ollama.js";
 import { okReport, errorReport, unavailableReport, spendReport, makeWindow } from "../lib/report.js";
 import { PROVIDERS } from "../providers/index.js";
 import { scenarios, NOW as SNAP_NOW } from "./_view-scenarios.js";
@@ -438,6 +440,15 @@ test("wanted: on the bar or in the panel; in neither → false; spend follows it
   assert.equal(wanted(noPanel, OC, { ...s, claude: GONE }, WITH_SPEND), true, "on the bar by default with no limits");
   assert.equal(wanted({ ...noPanel, spendOnBar: { opencode: true } }, OC, s, WITH_SPEND), true);
   assert.equal(wanted({ ...noPanel, spendOnBar: { opencode: false } }, OC, { ...s, claude: GONE }, WITH_SPEND), false);
+});
+
+test("wanted: an opt-in provider gets no fetch until enabled, then it does", () => {
+  const s = { claude: lim([win("5h", 30, NOW + 3600)]), codex: GONE, opencode: spend(1500, 9000) };
+  const off = effectivePrefs(null, undefined);
+  assert.equal(wanted(off, ollama, s), false, "un-enabled: not fetched at all");
+  assert.equal(wanted(toggleEnabled(off, "ollama"), ollama, s), true, "enabled: fetched");
+  assert.equal(wanted(toggleEnabled(toggleEnabled(off, "ollama"), "ollama"), ollama, s), false, "toggled off again");
+  assert.equal(wanted(off, claude, s), true, "claude is unaffected");
 });
 
 test("density: a spend group takes room", () => {

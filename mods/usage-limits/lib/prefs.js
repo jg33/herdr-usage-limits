@@ -2,12 +2,16 @@
 // Limits are opt-out lists, so anything new shows by itself. Session numbers are opt-in.
 // Prefs: { hidden: [providerId], hiddenWindows: ["<providerId>:<windowId>"], showResetTime: bool,
 //          showBars: bool, sessionOnBar: ["context"|"calls"|"compactions"] }
-//          panelHidden: [providerId|"session"], folded: [providerId], spendOnBar: { [providerId]: bool }
+//          panelHidden: [providerId|"session"], folded: [providerId], spendOnBar: { [providerId]: bool },
+//          enabled: [providerId] (the opt-in providers only: listed = on)
 // panelHidden: left out of the hover panel (hidden/hiddenWindows only ever mean "hidden from the bar").
 // folded: the provider's panel section shows its header only.
 // spendOnBar: explicit per-provider choice for spend on the bar; absent means the provider's default.
 // showResetTime: every window shows its time to reset, not only amber and red ones.
 // showBars: each limit has its bar when there's room; off, the bar shows numbers only.
+
+// Off until the user enables them: no bar row, no panel group, no fetch.
+export const OPT_IN_PROVIDERS = new Set(["ollama", "synthetic", "neuralwatt"]);
 
 const normalize = (p) => ({
   hidden: [...(p?.hidden ?? [])],
@@ -18,6 +22,7 @@ const normalize = (p) => ({
   panelHidden: [...(p?.panelHidden ?? [])],
   folded: [...(p?.folded ?? [])],
   spendOnBar: { ...(p?.spendOnBar ?? {}) },
+  enabled: [...(p?.enabled ?? [])],
 });
 
 // Saved choices win once they exist; until then the layout's props preset them.
@@ -25,7 +30,15 @@ export function effectivePrefs(saved, props) {
   return normalize(saved ?? props);
 }
 
+export const isEnabled = (prefs, providerId) => !OPT_IN_PROVIDERS.has(providerId) || (prefs.enabled ?? []).includes(providerId);
+
+export function toggleEnabled(prefs, providerId) {
+  const n = normalize(prefs);
+  return { ...n, enabled: flip(n.enabled, providerId) };
+}
+
 export function isShown(prefs, providerId, windowId) {
+  if (!isEnabled(prefs, providerId)) return false;
   if (prefs.hidden.includes(providerId)) return false;
   return windowId == null || !prefs.hiddenWindows.includes(`${providerId}:${windowId}`);
 }
@@ -54,7 +67,7 @@ export function toggleOnBar(prefs, row) {
   return { ...normalize(prefs), sessionOnBar: flip(prefs.sessionOnBar, row) };
 }
 
-export const inPanel = (prefs, id) => !(prefs.panelHidden ?? []).includes(id);
+export const inPanel = (prefs, id) => isEnabled(prefs, id) && !(prefs.panelHidden ?? []).includes(id);
 
 export function togglePanel(prefs, id) {
   const n = normalize(prefs);

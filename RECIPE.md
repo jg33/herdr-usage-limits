@@ -134,10 +134,21 @@ on the bar and in the panel. It never reads a token.
     "not installed", "failing with a last good reading" and "stale" work as for
     limits. `providers/index.js` lists them
     in order. A new provider is one more file there plus its helper.
+    `providers/ollama.js`, `providers/synthetic.js` and `providers/neuralwatt.js`
+    keep the limits shape, add `tint: true` (a one-colour SVG drawn in the text
+    colour), and are the opt-in three: `prefs.js`'s `enabled` list (default
+    `enabled: []`) gates `isShown`/`inPanel`, so an unticked one gets no fetch at
+    all. Windows: ollama one `balance` (`(allowance - included.balance_usd -
+    purchased.balance_usd) / allowance`, `purchased` a scalar or `{balance_usd}`,
+    absent = 0), synthetic `weekly` (`100 - planWeeklyLimit.percentRemaining`, the
+    only window), neuralwatt `key-weekly` (`key.allowance.spent_usd / limit_usd`) plus
+    `daily-energy` (`kwh_used / kwh_included`), `plan` from `limits.rate_limit_tier`;
+    every division guarded, no usable window → `errorReport`.
   - `icons/`: the mod's own (`gauge`, `refresh`, `gear`, `back`,
-    `chevron-down`, `chevron-right`); the agents' icons come from Herdr's.
+    `chevron-down`, `chevron-right`) plus the optional providers'
+    (`ollama`, `synthetic`, `neuralwatt`); the agents' icons come from Herdr's.
   - `lib/`: `report.js` (shapes), `format.js` (time, colors, pace),
-    `prefs.js` (opt-out lists, flags, panel, folds, spend on the bar),
+    `prefs.js` (opt-out lists, the opt-in `enabled` list, flags, panel, folds, spend on the bar),
     `session.js` (session line and block), `state.js` (next provider state),
     `view.js` (segments, panel and bar models, tightest window, the spend
     default, what is fetched, density). Pure; tested with `node --test`.
@@ -156,6 +167,19 @@ on the bar and in the panel. It never reads a token.
   - Both helpers: exit 0 with one JSON line, 127 when the CLI isn't found,
     1 on any other failure; ~15 s timeout. `HERDR_USAGE_CLAUDE_BIN` /
     `HERDR_USAGE_CODEX_BIN` override the binaries.
+  - `helpers/ollama-usage.sh`, `helpers/synthetic-usage.sh`,
+    `helpers/neuralwatt-usage.sh`: `curl -s --max-time 10`, one GET each of
+    `https://ollama.com/api/balance`, `https://api.synthetic.new/v2/quotas` and
+    `https://api.neuralwatt.com/v1/quota`, bearer key from `OLLAMA_API_KEY` /
+    `SYNTHETIC_API_KEY` / `NEURALWATT_API_KEY`, else the same-named entry of
+    `${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json`; print the reply body
+    whole as one JSON line, the key never echoed or written. Exit 0 with the
+    body, 127 when no key is found, 1 when curl fails, is missing or prints
+    nothing. No bashisms (`sh`, `printf`, `command -v`).
+  - `test/fixtures/ollama-balance.json`, `test/fixtures/synthetic-quotas.json` and
+    `test/fixtures/neuralwatt-quota.json`: real replies probed 2026-11-13, parsed by
+    `test/ollama.test.js`, `test/synthetic.test.js`, `test/neuralwatt.test.js`; the
+    helpers are tested against a fake `curl` on `PATH`, never the network.
   - `helpers/opencode-spend.sh`: runs `opencode stats --days 0 --json` and
     `--days 7 --json` at once, stdin closed, and prints
     `{"today":…,"week":…}` with both replies whole, each cut from its first line
@@ -196,8 +220,9 @@ on the bar and in the panel. It never reads a token.
 ## What it runs and reads
 
 - Runs `sh`, your `claude` CLI and your `codex` CLI, each briefly, every
-  5 minutes. They use their own sign-ins and talk to Anthropic / OpenAI; this
-  mod makes no network requests itself.
+  5 minutes. They use their own sign-ins and talk to Anthropic / OpenAI; the
+  mod's own code makes no network requests. The three optional providers'
+  helpers `curl` their own API, and only while the provider is enabled.
 - Runs `opencode stats --days 0 --json` and `--days 7 --json` every 5 minutes.
   Their reply holds counts, costs, model and tool names, no message text; it
   reaches the mod whole, and the mod uses the token numbers only.
@@ -205,7 +230,9 @@ on the bar and in the panel. It never reads a token.
   folder and start time, and Codex's open session file. `ps` also lists the
   processes, names and arguments, to count the copies of an agent in a folder;
   that stays on the machine.
-- Reads no token or credential file. Reads `~/.codex/sessions/**/*.jsonl`
+- Reads no token or credential file — except an enabled optional provider's
+  helper, which reads opencode's `auth.json` for its key when the env var is
+  absent. Reads `~/.codex/sessions/**/*.jsonl`
   only as a fallback.
 - Reads the focused session: Claude's and Codex's logs, OpenCode's database
   through `sqlite3`, read-only, and Pi's session files; Pi's files of the last
@@ -301,6 +328,22 @@ on the bar and in the panel. It never reads a token.
   away and back after editing.
 - macOS and Linux only (`sh`). Local machine only, one account per CLI.
 - Labels are English.
+- The three API providers (ollama, synthetic, neuralwatt) are opt-in: `prefs.js`
+  `enabled`, default `[]`, checked by `isShown`/`inPanel`, which is what
+  `wanted()` fetches through — unticked means no request is made at all. Don't
+  fold them into `hidden`, which means something else.
+- `percent` is **used**, not what's left: ollama's balance and synthetic's
+  `planWeeklyLimit.percentRemaining` are remaining and must be inverted before
+  `makeWindow`, or a full bar would mean an empty account.
+- Helper exit codes are the contract: 127 hides the row (no key = you don't use
+  the service), 1 shows an error with the last good reading kept (`parse` must
+  return `errorReport`, never throw), 0 feeds stdout to `parse`; an empty
+  `curl` reply must exit 1, not 0, and a missing `purchased` is 0, never a
+  missing number.
+- The three fixtures are real captured responses (2026-11-13), not sketches;
+  `~/Developer/repos/ai-dashboard`'s synthetic parser is stale for this
+  endpoint (it wants `maxCredits`/`remainingCredits`, which `/v2/quotas` never
+  returns) — reuse the idea, not its field names.
 
 ## Done when
 
